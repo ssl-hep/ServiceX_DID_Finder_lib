@@ -1,4 +1,4 @@
-# Copyright (c) 2024, IRIS-HEP
+# Copyright (c) 2024-2025, IRIS-HEP
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,7 @@ from celery import Celery
 
 from servicex_did_finder_lib.accumulator import Accumulator
 from servicex_did_finder_lib.did_finder_app import DIDFinderTask, DIDFinderApp
+from servicex_did_finder_lib import exceptions
 
 
 @pytest.fixture()
@@ -74,11 +75,15 @@ def test_did_finder_task(mocker, servicex, single_file_info):
         )
 
 
-def test_did_finder_task_exception(mocker, servicex, single_file_info):
+@pytest.mark.parametrize("exc", [Exception("Boom"),
+                                 exceptions.BadDatasetNameException("Bad name"),
+                                 exceptions.LookupFailureException("Boom 2"),
+                                 exceptions.NoSuchDatasetException("Not there")])
+def test_did_finder_task_exception(mocker, servicex, exc, single_file_info):
     did_finder_task = DIDFinderTask()
     # did_finder_task.app = mocker.Mock()
     did_finder_task.app.did_finder_args = {}
-    mock_generator = mocker.Mock(side_effect=Exception("Boom"))
+    mock_generator = mocker.Mock(side_effect=exc)
 
     mock_accumulator = mocker.MagicMock(Accumulator)
     with patch(
@@ -92,13 +97,14 @@ def test_did_finder_task_exception(mocker, servicex, single_file_info):
         mock_accumulator.add.assert_not_called()
         mock_accumulator.send_on.assert_not_called()
 
-        servicex.return_value.put_fileset_complete.assert_called_with(
+        error_type_str = (exc.error_type
+                          if isinstance(exc, exceptions.BaseDIDFinderException)
+                          else "internal_failure")
+        servicex.return_value.put_fileset_error.assert_called_with(
             {
-                "files": 0,  # Aught to have a side effect in mock accumulator that updates this
-                "files-skipped": 0,
-                "total-events": 0,
-                "total-bytes": 0,
                 "elapsed-time": 0,
+                "error-type": error_type_str,
+                "message": str(exc),
             }
         )
 

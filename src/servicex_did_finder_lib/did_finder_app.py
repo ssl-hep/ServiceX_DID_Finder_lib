@@ -1,4 +1,4 @@
-# Copyright (c) 2022, IRIS-HEP
+# Copyright (c) 2022-2025, IRIS-HEP
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -36,6 +36,7 @@ from servicex_did_finder_lib.did_logging import initialize_root_logger
 from servicex_did_finder_lib.did_summary import DIDSummary
 from servicex_did_finder_lib.servicex_adaptor import ServiceXAdapter
 from servicex_did_finder_lib.util_uri import parse_did_uri
+from servicex_did_finder_lib import exceptions
 
 # The type for the callback method to handle DID's, supplied by the user.
 # Arguments are:
@@ -102,14 +103,7 @@ class DIDFinderTask(Task):
 
             if did_info.file_count > 0:  # otherwise wait until all files arrive then limit results
                 acc.send_on(did_info.file_count)
-        except Exception:
-            # noinspection PyTypeChecker
-            self.logger.error(
-                f"Error processing DID {did}",
-                extra={"dataset_id": dataset_id},
-                exc_info=1
-            )
-        finally:
+
             elapsed_time = int((datetime.now() - start_time).total_seconds())
             servicex.put_fileset_complete(
                 {
@@ -119,6 +113,23 @@ class DIDFinderTask(Task):
                     "total-bytes": summary.total_bytes,
                     "elapsed-time": elapsed_time,
                 }
+            )
+        except Exception as e:
+            # noinspection PyTypeChecker
+            self.logger.error(
+                f"Error processing DID {did}",
+                extra={"dataset_id": dataset_id},
+                exc_info=1
+            )
+            elapsed_time = int((datetime.now() - start_time).total_seconds())
+            error_dict: dict[str, Any] = {"elapsed-time": elapsed_time,
+                                          "message": str(e)}
+            if isinstance(e, exceptions.BaseDIDFinderException):
+                error_dict["error-type"] = e.error_type
+            else:
+                error_dict["error-type"] = "internal_failure"
+            servicex.put_fileset_error(
+                error_dict
             )
 
 
