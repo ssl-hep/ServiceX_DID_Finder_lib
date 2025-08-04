@@ -1,4 +1,4 @@
-# Copyright (c) 2019, IRIS-HEP
+# Copyright (c) 2019-2025, IRIS-HEP
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -74,12 +74,31 @@ class ServiceXAdapter:
                 self.logger.error(f'After {attempts} tries, failed to send ServiceX App '
                                   f'a put_file_bulk message: {mesg} - Ignoring error.')
 
+    def put_file_add(self, file):
+        # add one file
+        self.put_file_add_bulk([file])
+
     def put_fileset_complete(self, summary):
         success = False
         attempts = 0
         while not success and attempts < MAX_RETRIES:
             try:
                 requests.put(f"{self.endpoint}{self.dataset_id}/complete", json=summary)
+                success = True
+            except requests.exceptions.ConnectionError:
+                self.logger.exception(f'Connection error to ServiceX App. Will retry '
+                                      f'(try {attempts} out of {MAX_RETRIES}')
+                attempts += 1
+        if not success:
+            self.logger.error(f'After {attempts} tries, failed to send ServiceX App a put_file '
+                              f'message: {str(summary)} - Ignoring error.')
+
+    def put_fileset_error(self, summary):
+        success = False
+        attempts = 0
+        while not success and attempts < MAX_RETRIES:
+            try:
+                requests.put(f"{self.endpoint}{self.dataset_id}/error", json=summary)
                 success = True
             except requests.exceptions.ConnectionError:
                 self.logger.exception(f'Connection error to ServiceX App. Will retry '
