@@ -5,10 +5,12 @@ description = "ServiceX DID Library Routines"
 authors = ["Gordon Watts <gwatts@uw.edu>"]
 
 [tool.poetry.dependencies]
-python = "^3.8.1"
+python = "^3.10"
 make-it-sync = "^1.0.0"
 requests = "^2.25.0"
 Celery= "^5.4"
+python-logstash = "^0.4.8"
+
 
 
 [tool.poetry.group.dev]

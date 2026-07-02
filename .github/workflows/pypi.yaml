@@ -17,12 +17,21 @@ jobs:
       - name: Get the version
         id: get_version
         run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/}
-      - name: Install poetry
-        uses: Gr1N/setup-poetry@v8
-      - name: Build
+      - name: Install Poetry
         run: |
-          poetry version ${{ steps.get_version.outputs.VERSION }}
-      - name: Build and publish to pypi
-        uses: JRubics/poetry-publish@v1.6
-        with:
-          pypi_token: ${{ secrets.pypi_password_sx_did_lib }}
+          python -m pip install --upgrade pip
+          python -m pip install pipx
+          python -m pipx ensurepath
+          pipx install "poetry==2.3.4"
+          poetry --version
+
+      - name: Set version from tag
+        run: poetry version "${GITHUB_REF#refs/tags/}"
+
+      - name: Build
+        run: poetry build
+
+      - name: Publish to PyPI
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.pypi_password_sx_did_lib }}
+        run: poetry publish
