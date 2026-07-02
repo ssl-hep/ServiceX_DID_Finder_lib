@@ -24,10 +24,14 @@ jobs:
           python -m pipx ensurepath
           pipx install "poetry==2.3.4"
           poetry --version
+
+      - name: Set version from tag
+        run: poetry version "${GITHUB_REF#refs/tags/}"
+
       - name: Build
-        run: |
-          poetry version ${{ steps.get_version.outputs.VERSION }}
-      - name: Build and publish to pypi
-        uses: JRubics/poetry-publish@v1.6
-        with:
-          pypi_token: ${{ secrets.pypi_password_sx_did_lib }}
+        run: poetry build
+
+      - name: Publish to PyPI
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.pypi_password_sx_did_lib }}
+        run: poetry publish
