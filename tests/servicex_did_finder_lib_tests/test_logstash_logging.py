@@ -137,6 +137,8 @@ def test_initialize_logging_returns_configured_logger(clear_logging_cache, monke
 
     assert result is log
     assert result.level == logging.INFO
+    # Not just tidiness: propagate=False is what guarantees a record is seen by
+    # exactly one set of handlers, so the vector handler never writes a row twice.
     assert result.propagate is False
     assert any(isinstance(h, logging.StreamHandler) for h in result.handlers)
 
@@ -217,3 +219,20 @@ def test_initialize_logging_uses_custom_logstash_port(
     initialize_logging(log=log, component_name="did-finder")
 
     assert created["port"] == 9999
+
+
+def test_initialize_logging_wires_up_vector(clear_logging_cache, monkeypatch):
+    monkeypatch.delenv("LOGSTASH_HOST", raising=False)
+    calls = []
+    monkeypatch.setattr(
+        logstash_logging,
+        "initialize_vector_logging",
+        lambda log, component_name: calls.append((log, component_name)),
+    )
+
+    log = logging.getLogger("test_with_vector")
+    log.handlers = []
+
+    initialize_logging(log=log, component_name="did-finder")
+
+    assert calls == [(log, "did-finder")]

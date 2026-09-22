@@ -25,7 +25,6 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-import json
 from datetime import datetime
 import requests
 import logging
@@ -64,15 +63,26 @@ class ServiceXAdapter:
             while not success and attempts < MAX_RETRIES:
                 try:
                     requests.put(f"{self.endpoint}{self.dataset_id}/files", json=mesg)
-                    self.logger.info(f"Metric: {json.dumps(mesg)}")
+                    # Deliberately not the serialized chunk: mesg holds up to
+                    # chunk_length file records, each with every replica path,
+                    # and this log now lands in a Postgres row.
+                    self.logger.debug('Sent file chunk to ServiceX App',
+                                      extra={"dataset_id": self.dataset_id,
+                                             "num_files": len(chunk)})
                     success = True
                 except requests.exceptions.ConnectionError:
                     self.logger.exception(f'Connection error to ServiceX App. Will retry '
-                                          f'(try {attempts} out of {MAX_RETRIES}')
+                                          f'(try {attempts} out of {MAX_RETRIES}',
+                                          extra={"dataset_id": self.dataset_id,
+                                                 "retry_status": f"{attempts}/{MAX_RETRIES}"})
                     attempts += 1
             if not success:
                 self.logger.error(f'After {attempts} tries, failed to send ServiceX App '
-                                  f'a put_file_bulk message: {mesg} - Ignoring error.')
+                                  f'a put_file_bulk message of {len(chunk)} files '
+                                  f'- Ignoring error.',
+                                  extra={"dataset_id": self.dataset_id,
+                                         "num_files": len(chunk),
+                                         "retry_status": f"{attempts}/{MAX_RETRIES}"})
 
     def put_file_add(self, file):
         # add one file
@@ -87,11 +97,15 @@ class ServiceXAdapter:
                 success = True
             except requests.exceptions.ConnectionError:
                 self.logger.exception(f'Connection error to ServiceX App. Will retry '
-                                      f'(try {attempts} out of {MAX_RETRIES}')
+                                      f'(try {attempts} out of {MAX_RETRIES}',
+                                      extra={"dataset_id": self.dataset_id,
+                                             "retry_status": f"{attempts}/{MAX_RETRIES}"})
                 attempts += 1
         if not success:
             self.logger.error(f'After {attempts} tries, failed to send ServiceX App a put_file '
-                              f'message: {str(summary)} - Ignoring error.')
+                              f'message: {str(summary)} - Ignoring error.',
+                              extra={"dataset_id": self.dataset_id,
+                                     "retry_status": f"{attempts}/{MAX_RETRIES}"})
 
     def put_fileset_error(self, summary):
         success = False
@@ -102,8 +116,12 @@ class ServiceXAdapter:
                 success = True
             except requests.exceptions.ConnectionError:
                 self.logger.exception(f'Connection error to ServiceX App. Will retry '
-                                      f'(try {attempts} out of {MAX_RETRIES}')
+                                      f'(try {attempts} out of {MAX_RETRIES}',
+                                      extra={"dataset_id": self.dataset_id,
+                                             "retry_status": f"{attempts}/{MAX_RETRIES}"})
                 attempts += 1
         if not success:
             self.logger.error(f'After {attempts} tries, failed to send ServiceX App a put_file '
-                              f'message: {str(summary)} - Ignoring error.')
+                              f'message: {str(summary)} - Ignoring error.',
+                              extra={"dataset_id": self.dataset_id,
+                                     "retry_status": f"{attempts}/{MAX_RETRIES}"})

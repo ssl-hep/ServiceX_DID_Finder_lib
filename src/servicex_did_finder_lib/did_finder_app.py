@@ -80,7 +80,7 @@ class DIDFinderTask(Task):
 
         self.logger.info(
             f"Received DID request {did}",
-            extra={"dataset_id": dataset_id}
+            extra={"dataset_id": dataset_id, "dataset_name": did}
         )
 
         servicex = ServiceXAdapter(dataset_id=dataset_id, endpoint=endpoint)
@@ -114,20 +114,39 @@ class DIDFinderTask(Task):
                     "elapsed-time": elapsed_time,
                 }
             )
+            self.logger.info(
+                f"DID lookup complete for {did}",
+                extra={
+                    "dataset_id": dataset_id,
+                    "dataset_name": did,
+                    "num_files": summary.file_count,
+                    "files_skipped": summary.files_skipped,
+                    "total_events": summary.total_events,
+                    "dataset_size": summary.total_bytes,
+                    "lookup_duration": elapsed_time,
+                },
+            )
         except Exception as e:
+            elapsed_time = int((datetime.now() - start_time).total_seconds())
+            if isinstance(e, exceptions.BaseDIDFinderException):
+                error_type = e.error_type
+            else:
+                error_type = "internal_failure"
             # noinspection PyTypeChecker
             self.logger.error(
                 f"Error processing DID {did}",
-                extra={"dataset_id": dataset_id},
+                extra={
+                    "dataset_id": dataset_id,
+                    "dataset_name": did,
+                    "error_type": error_type,
+                    "error_message": str(e),
+                    "lookup_duration": elapsed_time,
+                },
                 exc_info=1
             )
-            elapsed_time = int((datetime.now() - start_time).total_seconds())
             error_dict: dict[str, Any] = {"elapsed-time": elapsed_time,
-                                          "message": str(e)}
-            if isinstance(e, exceptions.BaseDIDFinderException):
-                error_dict["error-type"] = e.error_type
-            else:
-                error_dict["error-type"] = "internal_failure"
+                                          "message": str(e),
+                                          "error-type": error_type}
             servicex.put_fileset_error(
                 error_dict
             )

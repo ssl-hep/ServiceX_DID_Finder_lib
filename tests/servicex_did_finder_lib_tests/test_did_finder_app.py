@@ -109,6 +109,59 @@ def test_did_finder_task_exception(mocker, servicex, exc, single_file_info):
         )
 
 
+def test_did_finder_task_logs_completion(mocker, servicex, single_file_info):
+    """The completion record is what carries a successful lookup into
+    log_messages; without it a lookup that worked leaves no row at all."""
+    did_finder_task = DIDFinderTask()
+    did_finder_task.app.did_finder_args = {}
+    did_finder_task.logger = mocker.MagicMock()
+    mock_generator = mocker.Mock(return_value=iter([single_file_info]))
+
+    with patch(
+        "servicex_did_finder_lib.did_finder_app.Accumulator", autospec=True
+    ) as acc:
+        acc.return_value = mocker.MagicMock(Accumulator)
+        did_finder_task.do_lookup('did', 1, 'https://my-servicex', mock_generator)
+
+    extra = did_finder_task.logger.info.call_args.kwargs["extra"]
+    assert extra == {
+        "dataset_id": 1,
+        "dataset_name": "did",
+        "num_files": 0,
+        "files_skipped": 0,
+        "total_events": 0,
+        "dataset_size": 0,
+        "lookup_duration": 0,
+    }
+
+
+@pytest.mark.parametrize("exc", [Exception("Boom"),
+                                 exceptions.BadDatasetNameException("Bad name")])
+def test_did_finder_task_exception_logs_error_type(mocker, servicex, exc):
+    did_finder_task = DIDFinderTask()
+    did_finder_task.app.did_finder_args = {}
+    did_finder_task.logger = mocker.MagicMock()
+    mock_generator = mocker.Mock(side_effect=exc)
+
+    with patch(
+        "servicex_did_finder_lib.did_finder_app.Accumulator", autospec=True
+    ) as acc:
+        acc.return_value = mocker.MagicMock(Accumulator)
+        did_finder_task.do_lookup('did', 1, 'https://my-servicex', mock_generator)
+
+    error_type_str = (exc.error_type
+                      if isinstance(exc, exceptions.BaseDIDFinderException)
+                      else "internal_failure")
+    extra = did_finder_task.logger.error.call_args.kwargs["extra"]
+    assert extra == {
+        "dataset_id": 1,
+        "dataset_name": "did",
+        "error_type": error_type_str,
+        "error_message": str(exc),
+        "lookup_duration": 0,
+    }
+
+
 def test_celery_app():
     app = DIDFinderApp('foo')
     assert isinstance(app, Celery)

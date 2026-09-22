@@ -31,6 +31,8 @@ import os
 import logstash
 import functools
 
+from servicex_did_finder_lib.vector_logging import initialize_vector_logging
+
 instance = os.environ.get("INSTANCE_NAME", "Unknown")
 
 
@@ -120,7 +122,10 @@ def initialize_logging(log=None, component_name: str = None, **kwargs):
         log = logging.getLogger("servicex_did_finder_lib")
 
     log.setLevel(logging.INFO)
-    log.propagate = False  # keep our records out of the root logger Celery hijacks
+    # Keep our records out of the root logger Celery hijacks. This is also what
+    # keeps the vector handler below from seeing a record twice: nothing we log
+    # propagates on to another handler.
+    log.propagate = False
 
     stream_handler = logging.StreamHandler()
     stream_formatter = StreamFormatter(
@@ -141,6 +146,8 @@ def initialize_logging(log=None, component_name: str = None, **kwargs):
         logstash_handler.setFormatter(logstash_formatter)
         logstash_handler.setLevel(log.level)
         log.addHandler(logstash_handler)
+
+    initialize_vector_logging(log, component_name)
 
     log.info("Initialized logging")
 

@@ -28,6 +28,18 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def no_vector_env(monkeypatch):
+    """
+    Keep the vector handler out of every test that doesn't ask for it.
+    initialize_logging() attaches one whenever VECTOR_HOST and VECTOR_PORT are
+    both set, which would open a socket and leave a listener thread behind if a
+    developer happens to have them exported.
+    """
+    monkeypatch.delenv("VECTOR_HOST", raising=False)
+    monkeypatch.delenv("VECTOR_PORT", raising=False)
+
+
 @pytest.fixture
 def single_file_info():
     return {
