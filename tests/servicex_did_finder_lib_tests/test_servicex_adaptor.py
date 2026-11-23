@@ -27,8 +27,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import json
 
+import pytest
 import requests
 import responses
+from servicex_did_finder_lib import servicex_adaptor
 from servicex_did_finder_lib.servicex_adaptor import ServiceXAdapter
 
 
@@ -215,3 +217,162 @@ def test_put_file_error_failure():
         "elapsed-time": 10
     })
     assert len(responses.calls) == 3  # Max retries
+
+
+FILES_URL = 'http://servicex.org/12345/files'
+
+
+def _files(n):
+    return [{
+        'paths': [f'root://foo/file{i}.ROOT'],
+        'adler32': '32',
+        'file_size': 1024,
+        'file_events': 3141,
+        'file_key': f'foo/file{i}',
+    } for i in range(n)]
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    """Record put_files' retry waits instead of sleeping."""
+    waits = []
+    monkeypatch.setattr(servicex_adaptor.time, "sleep", waits.append)
+    return waits
+
+
+def _replies(*outcomes):
+    """A responses callback giving each outcome in turn: an int status, or an
+    exception to raise. A 200 reports max_file_id."""
+    remaining = list(outcomes)
+
+    def callback(request):
+        outcome = remaining.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        body = json.dumps({"max_file_id": 7}) if outcome == 200 else ""
+        return (outcome, {}, body)
+    return callback
+
+
+@responses.activate
+def test_put_files_reports_max_file_id(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(200))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    assert sx.put_files(_files(2)) == 7
+    [call] = responses.calls
+    sent = [f['file_key'] for f in json.loads(call.request.body)]
+    assert sent == ['foo/file0', 'foo/file1']
+    assert sleeps == []
+
+
+@responses.activate
+def test_put_files_retries_a_connection_blip(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(
+        requests.exceptions.ConnectionError("refused"), 200))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    assert sx.put_files(_files(1)) == 7
+    assert len(responses.calls) == 2
+    assert sleeps == [1.0]
+
+
+@responses.activate
+def test_put_files_retries_unavailable(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(503, 502, 200))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    assert sx.put_files(_files(1)) == 7
+    assert len(responses.calls) == 3
+    assert sleeps == list(servicex_adaptor.PUT_FILES_RETRY_DELAYS)
+
+
+@responses.activate
+def test_put_files_raises_when_the_app_stays_unavailable(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(503, 503, 503))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        sx.put_files(_files(1))
+    assert len(responses.calls) == 3
+
+
+@responses.activate
+def test_put_files_raises_when_the_app_stays_unreachable(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(
+        *[requests.exceptions.ConnectionError("refused")] * 3))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        sx.put_files(_files(1))
+    assert len(responses.calls) == 3
+
+
+@responses.activate
+def test_put_files_does_not_retry_a_client_error(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(400))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        sx.put_files(_files(1))
+    assert len(responses.calls) == 1
+    assert sleeps == []
+
+
+@responses.activate
+def test_put_files_resends_only_the_failed_chunk(sleeps):
+    responses.add_callback(responses.PUT, FILES_URL, callback=_replies(200, 503, 200))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    assert sx.put_files(_files(3), chunk_length=2) == 7
+    sent = [[f['file_key'] for f in json.loads(c.request.body)] for c in responses.calls]
+    assert sent == [['foo/file0', 'foo/file1'], ['foo/file2'], ['foo/file2']]
+
+
+@responses.activate
+def test_put_files_needs_max_file_id(sleeps):
+    responses.add(responses.PUT, FILES_URL, json={})
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+
+    with pytest.raises(ValueError, match="max_file_id"):
+        sx.put_files(_files(1))
+
+
+@responses.activate
+def test_put_files_returns_max_file_id():
+    ids = iter([7, 12])
+    responses.add_callback(
+        responses.PUT, 'http://servicex.org/12345/files',
+        callback=lambda request: (200, {}, json.dumps({"dataset_id": "12345",
+                                                       "max_file_id": next(ids)})))
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+    files = [{'paths': [f"f{i}"], 'adler32': 'a', 'file_size': 1, 'file_events': 2,
+              'file_key': f"key{i}"} for i in range(3)]
+
+    assert sx.put_files(files, chunk_length=2) == 12
+    assert len(responses.calls) == 2
+    submitted = json.loads(responses.calls[0].request.body)
+    assert [f['file_key'] for f in submitted] == ["key0", "key1"]
+    assert submitted[0]['paths'] == ["f0"]
+
+
+@responses.activate
+def test_put_files_raises_on_http_error():
+    responses.add(responses.PUT, 'http://servicex.org/12345/files', status=500)
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+    files = [{'paths': ["f"], 'adler32': 'a', 'file_size': 1, 'file_events': 2,
+              'file_key': "f"}]
+    with pytest.raises(requests.exceptions.HTTPError):
+        sx.put_files(files)
+    assert len(responses.calls) == 1  # Temporal retries, not the adaptor
+
+
+@responses.activate
+def test_put_files_requires_max_file_id():
+    responses.add(responses.PUT, 'http://servicex.org/12345/files',
+                  json={"dataset_id": "12345"})
+    sx = ServiceXAdapter("http://servicex.org/", '12345')
+    files = [{'paths': ["f"], 'adler32': 'a', 'file_size': 1, 'file_events': 2,
+              'file_key': "f"}]
+    with pytest.raises(ValueError):
+        sx.put_files(files)

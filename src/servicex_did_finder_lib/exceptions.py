@@ -27,26 +27,67 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Define some exceptions to indicate various problems in DID finding
+from temporalio.exceptions import ApplicationError
+
+from servicex_did_finder_lib.temporal_models import (
+    AUTH_FAILED,
+    BAD_DID,
+    DATASET_NOT_FOUND,
+    LOOKUP_FAILED,
+    NON_RETRYABLE_ERROR_TYPES,
+)
+
 
 class BaseDIDFinderException(Exception):
-    """ Base exception type """
+    """ Base exception type
+
+    error_type is the dataset status reported to ServiceX by the Celery
+    DIDFinderApp. temporal_type is the ApplicationError type raised by the
+    Temporal DIDFinderWorker; the orchestrator does not retry the types in
+    NON_RETRYABLE_ERROR_TYPES.
+    """
     transient: bool = True
     error_type: str = ""
+    temporal_type: str = LOOKUP_FAILED
 
 
 class NoSuchDatasetException(BaseDIDFinderException):
     """ The dataset does not exist in the catalog """
     transient = True
     error_type = "does_not_exist"
+    temporal_type = DATASET_NOT_FOUND
 
 
 class BadDatasetNameException(BaseDIDFinderException):
     """ The specified dataset name is invalid """
     transient = False
     error_type = "bad_name"
+    temporal_type = BAD_DID
 
 
 class LookupFailureException(BaseDIDFinderException):
     """ There was a failure when looking up the dataset in the catalog """
     transient = True
     error_type = "internal_failure"
+    temporal_type = LOOKUP_FAILED
+
+
+class AuthFailedException(BaseDIDFinderException):
+    """ The DID finder could not authenticate to the catalog (e.g. a bad x509 proxy).
+    Not retried under Temporal, so a bad credential does not hammer the catalog. """
+    transient = False
+    error_type = "internal_failure"
+    temporal_type = AUTH_FAILED
+
+
+def to_application_error(e: BaseException) -> ApplicationError:
+    """Convert an exception raised by a DID finder into the ApplicationError the
+    orchestrator's DatasetLookupWorkflow classifies by type."""
+    if isinstance(e, ApplicationError):
+        return e
+    error_type = e.temporal_type if isinstance(e, BaseDIDFinderException) else LOOKUP_FAILED
+    return ApplicationError(
+        f"{type(e).__name__}: {e}",
+        type=error_type,
+        non_retryable=error_type in NON_RETRYABLE_ERROR_TYPES,
+    )

@@ -66,6 +66,7 @@ Yield the results as you find them. The fields you need to pass back to the libr
 * `adler32`: A CRC number for the file. This CRC is calculated in a special way by rucio and is not used. Leave as 0 if you do not know it.
 * `file_size`: Number of bytes of the file. Used to calculate statistics. Leave as zero if you do not know it (or it is expensive to look up).
 * `file_events`: Number of events in the file. Used to calculate statistics. Leave as zero if you do not know it (or it is expensive to look up).
+* `file_key` (optional, used by the Temporal worker): A stable identity for the file that does not change between lookups, e.g. Rucio `scope:name`. ServiceX dedupes files on it. Defaults to the first entry in `paths`.
 
 Here's a simple example of a did handler generator:
 
@@ -75,12 +76,12 @@ def find_files(did_name: str,
                did_finder_args: Dict[str, Any]
                ) -> Generator[Dict[str, Any], None]:
     __log.info('DID Lookup request received.', extra={
-        'requestId': info['request-id'], 'dataset': did_name})
+        'dataset_id': info['dataset-id'], 'dataset': did_name})
 
     urls = xrd.glob(cache_prefix + did_name)
     if len(urls) == 0:
-        raise RuntimeError(f"No files found matching {did_name} for request "
-                           f"{info['request-id']} - are you sure it is correct?")
+        raise NoSuchDatasetException(f"No files found matching {did_name} for dataset "
+                                     f"{info['dataset-id']} - are you sure it is correct?")
 
     for url in urls:
         yield {
@@ -91,6 +92,58 @@ def find_files(did_name: str,
         }
 ```
 
+
+### Errors
+Raise one of the exceptions in `servicex_did_finder_lib.exceptions` to tell ServiceX why a
+lookup failed. Any other exception is treated as an internal failure.
+
+| Exception | Celery dataset status | Temporal error type | Retried under Temporal |
+|---|---|---|---|
+| `NoSuchDatasetException` | `does_not_exist` | `DatasetNotFound` | no |
+| `BadDatasetNameException` | `bad_name` | `BadDID` | no |
+| `AuthFailedException` | `internal_failure` | `AuthFailed` | no |
+| `LookupFailureException` or anything else | `internal_failure` | `LookupFailed` | yes |
+
+## Running as a Temporal worker
+ServiceX is moving from Celery to Temporal. The same `find_files` generator can run as a
+Temporal worker with `DIDFinderWorker`, which hosts the `lookup_dataset` activity that the
+ServiceX orchestrator's `DatasetLookupWorkflow` schedules. `DIDFinderApp` (Celery) is kept
+for one release while ServiceX cuts over.
+
+```python
+from servicex_did_finder_lib import DIDFinderWorker
+
+if __name__ == "__main__":
+    DIDFinderWorker("rucio", find_files, did_finder_args={"rucio_adapter": rucio_adaptor}).run()
+```
+
+The first argument is the DID scheme the finder serves. `run()` connects to Temporal (waiting
+until it is reachable), polls the `did-finder-<scheme>` task queue, and drains in-flight lookups
+on SIGTERM. Settings not passed to the constructor come from the environment:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal frontend |
+| `TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
+| `TEMPORAL_TASK_QUEUE` | `did-finder-<scheme>` | Task queue to poll |
+| `SERVICEX_INTERNAL_ENDPOINT` | (required) | The app's internal endpoint, e.g. `http://servicex-app:8000/servicex/internal/transformation/` |
+| `DID_FINDER_MAX_CONCURRENT` | `4` | Lookups this worker runs at once |
+
+How a lookup differs from the Celery path:
+
+* Files are sent to ServiceX in batches (300 files, or whatever has accumulated after 5 seconds).
+  After each batch the activity heartbeats and signals the lookup workflow, so transforms can
+  start on the first files while the lookup continues.
+* `find_files` runs in a thread, so blocking catalog calls are fine. The activity keeps
+  heartbeating while it waits.
+* The orchestrator, not the finder, marks the dataset complete or failed. Errors are raised to
+  Temporal, which retries everything except the non-retryable types above.
+* A retried lookup starts over. `info['resume']` holds `{"files_written", "last_file_key"}` from
+  the last batch the previous attempt committed (or `None`); a finder that lists files in a
+  stable order may use it to skip ahead. ServiceX dedupes on `file_key` either way.
+* `info` also carries `did-scheme` and `did-hash` alongside `dataset-id`.
+
+Requires Python 3.11 or later.
 
 ## Extra Command Line Arguments
 Sometimes you need to pass additional information to your DID Finder from the command line. You do
